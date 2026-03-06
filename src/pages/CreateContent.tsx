@@ -6,48 +6,77 @@ import { SourceSelector } from "@/components/create/SourceSelector";
 import { ConfigForm } from "@/components/create/ConfigForm";
 import { ContentPreview } from "@/components/create/ContentPreview";
 import { GeneratingState } from "@/components/create/GeneratingState";
-import { ContentSource, ToneOfVoice, WizardStep } from "@/types/content";
+import {
+  ContentSource,
+  ToneOfVoice,
+  WizardStep,
+  ContentGenerationConfig,
+  GeneratedContentData,
+  N8nTriggerPayload,
+} from "@/types/content";
+import { triggerGeneration, publishOrSaveDraft } from "@/lib/n8nApi";
+import { toast } from "@/hooks/use-toast";
 
 const wizardSteps: WizardStep[] = [
-  { id: 1, title: 'Fonte', description: 'Escolha a origem', isCompleted: false, isCurrent: true },
-  { id: 2, title: 'Configuração', description: 'Defina parâmetros', isCompleted: false, isCurrent: false },
-  { id: 3, title: 'Geração', description: 'IA trabalhando', isCompleted: false, isCurrent: false },
-  { id: 4, title: 'Revisão', description: 'Ajuste e publique', isCompleted: false, isCurrent: false },
+  { id: 1, title: "Fonte", description: "Escolha a origem", isCompleted: false, isCurrent: true },
+  { id: 2, title: "Configuração", description: "Defina parâmetros", isCompleted: false, isCurrent: false },
+  { id: 3, title: "Geração", description: "IA trabalhando", isCompleted: false, isCurrent: false },
+  { id: 4, title: "Revisão", description: "Ajuste e publique", isCompleted: false, isCurrent: false },
 ];
 
-const mockGeneratedContent = {
-  title: 'Como Dominar SEO em 2024: Guia Completo para Iniciantes',
-  slug: 'como-dominar-seo-2024-guia-completo',
-  metaDescription: 'Aprenda as técnicas essenciais de SEO para posicionar seu site no topo do Google. Guia atualizado com as melhores práticas de 2024.',
-  body: `
-    <h2>O que é SEO e por que é importante?</h2>
-    <p>SEO (Search Engine Optimization) é o conjunto de técnicas e estratégias para melhorar o posicionamento de um site nos resultados orgânicos dos mecanismos de busca, como o Google.</p>
-    
-    <h3>Benefícios do SEO</h3>
-    <ul>
-      <li>Aumento do tráfego orgânico</li>
-      <li>Maior credibilidade e autoridade</li>
-      <li>Melhor experiência do usuário</li>
-      <li>ROI sustentável a longo prazo</li>
-    </ul>
-    
-    <h2>Pilares Fundamentais do SEO</h2>
-    <p>Para uma estratégia de SEO eficaz, é essencial trabalhar três pilares principais: técnico, conteúdo e autoridade.</p>
-    
-    <h3>SEO Técnico</h3>
-    <p>Envolve a otimização da estrutura do site, velocidade de carregamento, mobile-first indexing e arquitetura de informação.</p>
-    
-    <h3>SEO de Conteúdo</h3>
-    <p>Foca na criação de conteúdo relevante, otimizado para palavras-chave e que atenda à intenção de busca do usuário.</p>
-    
-    <h2>FAQ - Perguntas Frequentes</h2>
-    <h4>Quanto tempo leva para ver resultados de SEO?</h4>
-    <p>Geralmente, os primeiros resultados aparecem entre 3 a 6 meses, dependendo da competitividade do nicho.</p>
-    
-    <h4>SEO é melhor que tráfego pago?</h4>
-    <p>Ambos têm seus méritos. SEO oferece resultados sustentáveis, enquanto tráfego pago traz resultados imediatos.</p>
-  `,
+const defaultConfig: ContentGenerationConfig = {
+  source: "rss",
+  sourceInput: "",
+  keyword: "",
+  toneOfVoice: "professional",
+  persona: "",
+  niche: "",
+  language: "pt-BR",
+  generateFAQ: true,
+  siteUrl: "",
+  postStatus: "Rascunho",
+  imageBank: "Dall-e",
+  imageInSubtitle: "NÃO",
+  conclusion: true,
+  postLinkInterno: false,
+  videoYoutube: true,
+  reference: true,
+  resumo: true,
+  planilhaId: "",
+  planilhaAba: "0",
+  customPostType: "",
+  customTaxonomia: "",
+  logoMarcaDaguaUrl: "",
+  overlayMarcaDaguaUrl: "",
 };
+
+function configToPayload(config: ContentGenerationConfig): N8nTriggerPayload {
+  return {
+    source: config.source,
+    sourceInput: config.sourceInput,
+    keyword: config.keyword,
+    toneOfVoice: config.toneOfVoice,
+    persona: config.persona,
+    niche: config.niche,
+    language: config.language,
+    generateFAQ: config.generateFAQ,
+    siteUrl: config.siteUrl,
+    postStatus: config.postStatus,
+    imageBank: config.imageBank,
+    imageInSubtitle: config.imageInSubtitle,
+    conclusion: config.conclusion,
+    postLinkInterno: config.postLinkInterno,
+    videoYoutube: config.videoYoutube,
+    reference: config.reference,
+    resumo: config.resumo,
+    planilhaId: config.planilhaId,
+    planilhaAba: config.planilhaAba,
+    customPostType: config.customPostType,
+    customTaxonomia: config.customTaxonomia,
+    logoMarcaDaguaUrl: config.logoMarcaDaguaUrl,
+    overlayMarcaDaguaUrl: config.overlayMarcaDaguaUrl,
+  };
+}
 
 interface CreateContentProps {
   onNavigate: (page: string) => void;
@@ -57,24 +86,66 @@ export function CreateContent({ onNavigate }: CreateContentProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedSource, setSelectedSource] = useState<ContentSource | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [config, setConfig] = useState({
-    sourceInput: '',
-    keyword: '',
-    toneOfVoice: 'professional' as ToneOfVoice,
-    persona: '',
-    niche: '',
-    language: 'pt-BR',
-    generateFAQ: true,
+  const [config, setConfig] = useState<ContentGenerationConfig>({
+    ...defaultConfig,
   });
 
-  const handleConfigChange = (field: string, value: string | boolean) => {
+  const handleSelectSource = (source: ContentSource) => {
+    setSelectedSource(source);
+    setConfig((prev) => ({ ...prev, source }));
+  };
+  const [generatedContent, setGeneratedContent] = useState<GeneratedContentData | null>(null);
+  const [executionId, setExecutionId] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [isPublishing, setIsPublishing] = useState(false);
+
+  const handleConfigChange = (field: keyof ContentGenerationConfig, value: string | boolean) => {
     setConfig((prev) => ({ ...prev, [field]: value }));
   };
 
+  const startGeneration = useCallback(async () => {
+    if (!selectedSource) return;
+    setGenerationError(null);
+    setIsGenerating(true);
+    setCurrentStep(2);
+    const payload = configToPayload({ ...config, source: selectedSource });
+    try {
+      const result = await triggerGeneration(payload);
+      if (result.success && result.content) {
+        setGeneratedContent(result.content);
+        if (result.executionId) setExecutionId(result.executionId);
+        setIsGenerating(false);
+        setCurrentStep(3);
+        if (!import.meta.env.VITE_N8N_WEBHOOK_URL) {
+          toast({
+            title: "Modo demo",
+            description: "Configure VITE_N8N_WEBHOOK_URL no .env para conectar ao n8n.",
+          });
+        }
+      } else {
+        setGenerationError(result.error ?? "Erro ao gerar conteúdo");
+        setIsGenerating(false);
+        toast({
+          title: "Erro na geração",
+          description: result.error,
+          variant: "destructive",
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro inesperado";
+      setGenerationError(message);
+      setIsGenerating(false);
+      toast({
+        title: "Erro",
+        description: message,
+        variant: "destructive",
+      });
+    }
+  }, [config, selectedSource]);
+
   const handleNext = () => {
     if (currentStep === 1) {
-      setIsGenerating(true);
-      setCurrentStep(2);
+      startGeneration();
     } else {
       setCurrentStep((prev) => Math.min(prev + 1, wizardSteps.length - 1));
     }
@@ -93,11 +164,64 @@ export function CreateContent({ onNavigate }: CreateContentProps) {
     setCurrentStep(3);
   }, []);
 
+  const handleContentUpdate = useCallback((updated: GeneratedContentData) => {
+    setGeneratedContent((prev) => (prev ? { ...prev, ...updated } : updated));
+  }, []);
+
+  const handleSaveDraft = async () => {
+    if (!generatedContent) return;
+    setIsPublishing(true);
+    try {
+      const result = await publishOrSaveDraft(generatedContent, "draft");
+      if (result.success) {
+        toast({ title: "Rascunho salvo", description: "O conteúdo foi salvo como rascunho." });
+        onNavigate("history");
+      } else {
+        toast({ title: "Erro ao salvar", description: result.error, variant: "destructive" });
+      }
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!generatedContent) return;
+    setIsPublishing(true);
+    try {
+      const result = await publishOrSaveDraft(generatedContent, "publish");
+      if (result.success) {
+        toast({
+          title: "Artigo publicado",
+          description: result.link ? `Disponível em: ${result.link}` : "Publicado com sucesso.",
+        });
+        onNavigate("history");
+      } else {
+        toast({ title: "Erro ao publicar", description: result.error, variant: "destructive" });
+      }
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
   const canProceed = () => {
     if (currentStep === 0) return selectedSource !== null;
-    if (currentStep === 1) return config.sourceInput.trim() !== '';
+    if (currentStep === 1) return config.sourceInput.trim() !== "";
     return true;
   };
+
+  const previewContent = generatedContent
+    ? {
+        title: generatedContent.title,
+        slug: generatedContent.slug,
+        metaDescription: generatedContent.metaDescription,
+        body: generatedContent.body,
+        keyword: generatedContent.keyword,
+        categoryId: generatedContent.categoryId,
+        tagIds: generatedContent.tagIds,
+        featuredMediaId: generatedContent.featuredMediaId,
+        featuredImageUrl: generatedContent.featuredImageUrl,
+      }
+    : null;
 
   const renderStepContent = () => {
     switch (currentStep) {
@@ -112,10 +236,10 @@ export function CreateContent({ onNavigate }: CreateContentProps) {
                 Selecione de onde a IA irá extrair as informações para criar seu artigo
               </p>
             </div>
-            <SourceSelector selected={selectedSource} onSelect={setSelectedSource} />
+            <SourceSelector selected={selectedSource} onSelect={handleSelectSource} />
           </div>
         );
-      
+
       case 1:
         return (
           <div className="animate-fade-in max-w-2xl mx-auto">
@@ -134,16 +258,21 @@ export function CreateContent({ onNavigate }: CreateContentProps) {
             />
           </div>
         );
-      
+
       case 2:
         return (
           <div className="animate-fade-in">
-            <GeneratingState onComplete={handleGenerationComplete} />
+            <GeneratingState
+              onComplete={handleGenerationComplete}
+              error={generationError}
+              isComplete={!!generatedContent && !isGenerating}
+              onBack={() => setCurrentStep(1)}
+            />
           </div>
         );
-      
+
       case 3:
-        return (
+        return previewContent ? (
           <div className="animate-fade-in">
             <div className="text-center mb-8">
               <h2 className="font-display text-2xl font-bold text-foreground">
@@ -154,18 +283,38 @@ export function CreateContent({ onNavigate }: CreateContentProps) {
               </p>
             </div>
             <ContentPreview
-              content={mockGeneratedContent}
-              seoScore={{
-                overall: 87,
-                readability: 85,
-                keywordDensity: 90,
-                structure: 88,
-                meta: 92,
+              content={previewContent}
+              seoScore={
+                generatedContent?.seoScore ?? {
+                  overall: 75,
+                  readability: 80,
+                  keywordDensity: 70,
+                  structure: 78,
+                  meta: 72,
+                }
+              }
+              onContentChange={handleContentUpdate}
+              onCopy={() => {
+                navigator.clipboard.writeText(generatedContent?.body ?? "");
+                toast({ title: "Copiado", description: "Conteúdo copiado para a área de transferência." });
+              }}
+              onExport={() => {
+                const blob = new Blob([generatedContent?.body ?? ""], { type: "text/html" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `${generatedContent?.slug ?? "artigo"}.html`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+                toast({ title: "Exportado", description: "Arquivo HTML baixado." });
               }}
             />
           </div>
+        ) : (
+          <div className="py-12 text-center text-muted-foreground">
+            Nenhum conteúdo gerado. Volte e clique em &quot;Gerar Conteúdo&quot;.
+          </div>
         );
-      
+
       default:
         return null;
     }
@@ -173,9 +322,8 @@ export function CreateContent({ onNavigate }: CreateContentProps) {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Header */}
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => onNavigate('dashboard')}>
+        <Button variant="ghost" size="icon" onClick={() => onNavigate("dashboard")}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
@@ -188,15 +336,12 @@ export function CreateContent({ onNavigate }: CreateContentProps) {
         </div>
       </div>
 
-      {/* Progress */}
       <WizardProgress steps={wizardSteps} currentStep={currentStep} />
 
-      {/* Content */}
       <div className="rounded-xl border border-border bg-card p-6 lg:p-8">
         {renderStepContent()}
       </div>
 
-      {/* Navigation */}
       {currentStep !== 2 && (
         <div className="flex items-center justify-between">
           <Button
@@ -228,10 +373,18 @@ export function CreateContent({ onNavigate }: CreateContentProps) {
             </Button>
           ) : (
             <div className="flex gap-3">
-              <Button variant="outline">
+              <Button
+                variant="outline"
+                onClick={handleSaveDraft}
+                disabled={isPublishing}
+              >
                 Salvar Rascunho
               </Button>
-              <Button variant="gradient">
+              <Button
+                variant="gradient"
+                onClick={handlePublish}
+                disabled={isPublishing}
+              >
                 Publicar Artigo
               </Button>
             </div>
